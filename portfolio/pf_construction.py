@@ -1,47 +1,31 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.base import BaseEstimator, TransformerMixin
 import joblib
-import logging
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-class DropAllNaNFeatures(BaseEstimator, TransformerMixin):
-    def fit(self, X, y=None):
-        self.columns_to_drop_ = X.columns[X.isnull().all()].tolist()
-        return self
-
-    def transform(self, X):
-        return X.drop(columns=self.columns_to_drop_, errors='ignore')
-
-def load_factors(file_path):
-    """Load factor list from a file"""
-    with open(file_path, 'r') as f:
-        factors = [line.strip() for line in f if line.strip()]
-    return factors
 
 def load_data(file_path):
-    """Load the stock dataset"""
     df = pd.read_csv(file_path)
     df['date'] = pd.to_datetime(df['date'])
+    df = df[(df['date'] >= '2000-01-01') & (df['date'] <= '2023-12-31')]
+    print(f"Loaded data shape: {df.shape}")
+    print(f"Columns in the dataset: {df.columns.tolist()}")
     return df
 
 def prepare_features(df, factors):
-    """Prepare features for prediction"""
     available_factors = [f for f in factors if f in df.columns]
-    missing_factors = set(factors) - set(available_factors)
-    if missing_factors:
-        logging.warning(f"The following factors are not in the dataset and will be excluded: {missing_factors}")
+    print(f"Number of available factors: {len(available_factors)}")
+    print(f"Factors not found in the dataset: {set(factors) - set(available_factors)}")
+    
+    if 'sentiment' in df.columns:
+        available_factors.append('sentiment')
+    else:
+        print("Warning: 'sentiment' column not found in the dataset")
+    
     return df[available_factors]
 
-def predict_returns(pipeline, X):
-    """Predict returns using the trained pipeline"""
-    return pipeline.predict(X)
+def predict_returns(model, X):
+    return model.predict(X)
 
 def construct_portfolio(df, predicted_returns, n_stocks=50):
-    """Construct a long-short portfolio based on predicted returns"""
     df['predicted_return'] = predicted_returns
     df_sorted = df.sort_values('predicted_return', ascending=False)
     
@@ -53,35 +37,27 @@ def construct_portfolio(df, predicted_returns, n_stocks=50):
     
     return portfolio
 
-def calculate_portfolio_return(portfolio):
-    """Calculate the portfolio return"""
-    return (portfolio['stock_exret'] * portfolio['weight']).sum()
-
 def main():
-    # Load data and factor list
-    df = load_data('hackathon_sample_v2.csv')
-    factors = load_factors('factor_char_list.csv')
+    df = load_data('sentiment/data_with_sentiment.csv')
+    with open('factor analysis/factor_char_list.csv', 'r') as f:
+        factors = [line.strip() for line in f if line.strip()]
     
-    # Load the best model pipeline
-    best_pipeline = joblib.load('best_model_pipeline.joblib')
-    
-    # Prepare features
     X = prepare_features(df, factors)
     
-    # Predict returns using the pipeline
-    predicted_returns = predict_returns(best_pipeline, X)
+    try:
+        best_model = joblib.load('model selection/best_model.joblib')
+    except FileNotFoundError:
+        print("Error: 'best_model.joblib' not found. Please run model selection first.")
+        return
     
-    # Construct portfolio
+    predicted_returns = predict_returns(best_model, X)
+    
     portfolio = construct_portfolio(df, predicted_returns)
     
-    # Calculate portfolio return
-    portfolio_return = calculate_portfolio_return(portfolio)
-    
-    logging.info(f"Portfolio return: {portfolio_return:.4f}")
-    
-    # Save portfolio
-    portfolio.to_csv('portfolio.csv', index=False)
-    logging.info("Portfolio saved to 'portfolio.csv'")
+    portfolio.to_csv('portfolio/portfolio.csv', index=False)
+    print("Portfolio saved to 'portfolio.csv'")
+    print(f"Portfolio shape: {portfolio.shape}")
+    print(f"Columns in the portfolio: {portfolio.columns.tolist()}")
 
 if __name__ == "__main__":
     main()

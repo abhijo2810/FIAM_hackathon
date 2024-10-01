@@ -2,60 +2,52 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
-import logging
+import seaborn as sns
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def load_portfolio(file_path):
+    df = pd.read_csv(file_path)
+    print(f"Portfolio data shape: {df.shape}")
+    print(f"Portfolio columns: {df.columns.tolist()}")
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df = df[(df['date'] >= '2000-01-01') & (df['date'] <= '2023-12-31')]
+    else:
+        print("Warning: 'date' column not found in portfolio data")
+    return df
 
-def load_and_explore_data(file_path, file_type):
-    """Load data and explore its structure"""
-    try:
-        df = pd.read_csv(file_path)
-        logging.info(f"{file_type} data shape: {df.shape}")
-        logging.info(f"{file_type} columns: {df.columns.tolist()}")
-        logging.info(f"{file_type} data types:\n{df.dtypes}")
-        logging.info(f"{file_type} first few rows:\n{df.head()}")
-        
-        if file_type == 'Market' and 'year' in df.columns and 'month' in df.columns:
+def load_market_data(file_path):
+    df = pd.read_csv(file_path)
+    print(f"Market data shape: {df.shape}")
+    print(f"Market data columns: {df.columns.tolist()}")
+    if 'date' not in df.columns:
+        if 'year' in df.columns and 'month' in df.columns:
+            print("Creating 'date' column from 'year' and 'month'")
             df['date'] = pd.to_datetime(df['year'].astype(str) + '-' + df['month'].astype(str) + '-01')
-            df['date'] = df['date'] + pd.offsets.MonthEnd(0)
-            df = df.drop(['year', 'month'], axis=1)
-            logging.info("Created 'date' column from 'year' and 'month'")
-            logging.info(f"Updated {file_type} columns: {df.columns.tolist()}")
-            logging.info(f"Updated {file_type} first few rows:\n{df.head()}")
-        
-        return df
-    except Exception as e:
-        logging.error(f"Error loading {file_type} data: {e}")
-        return None
+        else:
+            print("Error: Unable to create 'date' column. 'year' and 'month' columns not found.")
+            return None
+    df['date'] = pd.to_datetime(df['date'])
+    df = df[(df['date'] >= '2000-01-01') & (df['date'] <= '2023-12-31')]
+    return df
 
 def calculate_portfolio_returns(portfolio):
-    """Calculate monthly portfolio returns"""
-    if 'date' not in portfolio.columns or 'stock_exret' not in portfolio.columns or 'weight' not in portfolio.columns:
-        logging.error("Portfolio data is missing required columns (date, stock_exret, or weight)")
+    if 'weight' not in portfolio.columns or 'stock_exret' not in portfolio.columns:
+        print("Error: 'weight' or 'stock_exret' column not found in portfolio data")
         return None
-    
-    portfolio['date'] = pd.to_datetime(portfolio['date'])
-    monthly_returns = portfolio.groupby('date').apply(lambda x: (x['stock_exret'] * x['weight']).sum())
-    monthly_returns.name = 'portfolio_return'
-    return monthly_returns
+    returns = portfolio.groupby('date').apply(lambda x: (x['stock_exret'] * x['weight']).sum())
+    returns.name = 'portfolio_return'
+    return returns.reset_index()
 
 def calculate_performance_metrics(portfolio_returns, market_returns, risk_free_rate):
-    """Calculate various performance metrics"""
-    if len(portfolio_returns) == 0:
-        logging.error("Portfolio returns data is empty")
-        return None
-
     excess_returns = portfolio_returns - risk_free_rate
     market_excess_returns = market_returns - risk_free_rate
     
     sharpe_ratio = np.sqrt(12) * excess_returns.mean() / excess_returns.std()
     beta, alpha, _, _, _ = stats.linregress(market_excess_returns, excess_returns)
     alpha *= 12  # Annualize alpha
-    
     tracking_error = (excess_returns - market_excess_returns).std() * np.sqrt(12)
     information_ratio = (excess_returns - market_excess_returns).mean() * 12 / tracking_error
-    
+    max_monthly_loss = portfolio_returns.min()
     cumulative_returns = (1 + excess_returns).cumprod()
     peak = cumulative_returns.cummax()
     drawdown = (cumulative_returns - peak) / peak
@@ -66,11 +58,16 @@ def calculate_performance_metrics(portfolio_returns, market_returns, risk_free_r
         'Alpha (annualized)': alpha,
         'Beta': beta,
         'Information Ratio': information_ratio,
+        'Maximum one-month loss': max_monthly_loss,
         'Maximum Drawdown': max_drawdown
     }
 
+def calculate_turnover(portfolio):
+    monthly_holdings = portfolio.groupby('date')['weight'].apply(lambda x: x.abs().sum()) / 2
+    turnover = monthly_holdings.diff().abs().mean() * 12  # Annualized turnover
+    return turnover
+
 def plot_cumulative_returns(portfolio_returns, market_returns, risk_free_rate):
-    """Plot cumulative returns of portfolio vs market"""
     excess_returns = portfolio_returns - risk_free_rate
     market_excess_returns = market_returns - risk_free_rate
     
@@ -84,58 +81,60 @@ def plot_cumulative_returns(portfolio_returns, market_returns, risk_free_rate):
     plt.xlabel('Date')
     plt.ylabel('Cumulative Return')
     plt.legend()
+    plt.savefig('performance evaluation/cumulative_returns.png')
+    plt.close()
+
+def plot_metric(metric_name, value):
+    plt.figure(figsize=(8, 6))
+    sns.barplot(x=[metric_name], y=[value])
+    plt.title(f'{metric_name}: {value:.4f}')
+    plt.savefig(f'{metric_name.lower().replace(" ", "_")}.png')
+    plt.close()
+
+def plot_all_metrics(metrics):
+    plt.figure(figsize=(12, 8))
+    sns.barplot(x=list(metrics.keys()), y=list(metrics.values()))
+    plt.title('Performance Metrics')
+    plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
-    plt.savefig('cumulative_returns.png')
+    plt.savefig('performance evaluation/all_metrics.png')
     plt.close()
 
 def main():
-    # Load and explore portfolio and market data
-    portfolio = load_and_explore_data('portfolio.csv', 'Portfolio')
-    market_data = load_and_explore_data('mkt_ind.csv', 'Market')
+    portfolio = load_portfolio('portfolio/portfolio.csv')
+    market_data = load_market_data('data_cleaning/mkt_ind.csv')
     
-    if portfolio is None or market_data is None:
-        logging.error("Failed to load necessary data. Exiting.")
+    if market_data is None:
+        print("Error: Failed to load market data")
         return
     
-    # Calculate portfolio returns
     portfolio_returns = calculate_portfolio_returns(portfolio)
     if portfolio_returns is None:
+        print("Error: Failed to calculate portfolio returns")
         return
     
-    # Ensure necessary columns are present in market data
-    required_columns = ['date', 'sp_ret', 'rf']
-    if not all(col in market_data.columns for col in required_columns):
-        logging.error(f"Market data is missing required columns. Expected: {required_columns}")
+    print("Portfolio returns shape:", portfolio_returns.shape)
+    print("Market data shape:", market_data.shape)
+    
+    aligned_data = pd.merge(portfolio_returns, market_data, on='date', how='inner')
+    print("Aligned data shape:", aligned_data.shape)
+    print("Aligned data columns:", aligned_data.columns.tolist())
+    
+    if 'sp_ret' not in aligned_data.columns or 'rf' not in aligned_data.columns:
+        print("Error: Required columns not found in market data")
+        print("Available columns:", aligned_data.columns.tolist())
         return
     
-    # Align dates
-    logging.info(f"Portfolio returns date range: {portfolio_returns.index.min()} to {portfolio_returns.index.max()}")
-    logging.info(f"Market data date range: {market_data['date'].min()} to {market_data['date'].max()}")
-    
-    aligned_data = pd.merge(portfolio_returns.reset_index(), market_data, on='date', how='inner')
-    
-    logging.info(f"Aligned data shape: {aligned_data.shape}")
-    logging.info(f"Aligned data date range: {aligned_data['date'].min()} to {aligned_data['date'].max()}")
-    
-    if aligned_data.empty:
-        logging.error("No overlapping dates between portfolio returns and market data")
-        return
-    
-    aligned_data.set_index('date', inplace=True)
-    
-    # Calculate performance metrics
     metrics = calculate_performance_metrics(aligned_data['portfolio_return'], aligned_data['sp_ret'], aligned_data['rf'])
+    turnover = calculate_turnover(portfolio)
+    metrics['Turnover (annualized)'] = turnover
     
-    if metrics is not None:
-        # Print performance metrics
-        for metric, value in metrics.items():
-            logging.info(f"{metric}: {value:.4f}")
-        
-        # Plot cumulative returns
-        plot_cumulative_returns(aligned_data['portfolio_return'], aligned_data['sp_ret'], aligned_data['rf'])
-        logging.info("Cumulative returns plot saved as 'cumulative_returns.png'")
-    else:
-        logging.error("Failed to calculate performance metrics")
+    for metric, value in metrics.items():
+        print(f"{metric}: {value:.4f}")
+        plot_metric(metric, value)
+    
+    plot_all_metrics(metrics)
+    plot_cumulative_returns(aligned_data['portfolio_return'], aligned_data['sp_ret'], aligned_data['rf'])
 
 if __name__ == "__main__":
     main()
